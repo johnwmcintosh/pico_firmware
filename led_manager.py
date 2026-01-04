@@ -5,7 +5,7 @@ class LEDStatus:
     def __init__(self, pin=25):
         self.led = Pin(pin, Pin.OUT)
         self.mode = "heartbeat"
-        self.timer = Timer(0)
+        self.timer = Timer()
 
         # State for watchdog blink pattern
         self._wd_step = 0

@@ -2,8 +2,8 @@ from machine import Timer
 from led_manager import LEDStatus
 
 class Watchdog:
-    def __init__(self, timer_id=0, timeout_ms=2000, callback=None, led_status: LEDStatus | None = None):
-        self.timer = Timer(timer_id)
+    def __init__(self, timeout_ms=2000, callback=None, led_status: LEDStatus | None = None):
+        self.timer = Timer()
         self.timeout_ms = timeout_ms
         self.callback = callback or self._default_callback
         self._armed = False

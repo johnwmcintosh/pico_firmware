@@ -1,16 +1,9 @@
-# main.py
-import sys
-if sys.stdin.__class__.__name__ == "TextIOWrapper":
-    print("SAFE BOOT: Skipping main.py")
-    raise SystemExit
-
-print(">>> main.py STARTED <<<")
+# firmware.py
 
 import sys
 import time
-time.sleep(1.5)
-
 import _thread
+import select
 
 from machine import UART
 
@@ -20,37 +13,30 @@ from led_manager import LEDStatus
 from watchdog import Watchdog
 from command_parser import CommandParser
 
+print(">>> firmware.py STARTED <<<")
+time.sleep(0.3)
+
 # ---------------------------------------------------------
 # USB / mode detection
 # ---------------------------------------------------------
 
 def is_usb_connected():
     """
-    Detect whether we're running with an attached USB/VS Code REPL
-    vs standalone on the robot.
+    Returns True if a USB REPL (Thonny/terminal) is active.
+    Does NOT mean "Pico is powered by USB".
     """
     cls = sys.stdin.__class__.__name__
     return cls in ("USB_VCP", "TextIOWrapper")
 
 
 # ---------------------------------------------------------
-# Debug console for feeding REPL input into the parser
+# Debug console (RUN MODE only, NEVER under Thonny)
 # ---------------------------------------------------------
 
-# ---------------------------------------------------------
-# Non-blocking REPL poller for DEBUG MODE
-# ---------------------------------------------------------
-
-import select
-
-# ---------------------------------------------------------
-# Non-blocking REPL poller for DEBUG MODE (Pico 2 safe)
-# ---------------------------------------------------------
 class DebugConsole:
     """
-    Non-blocking REPL reader for Pico 2.
-    Reads sys.stdin one character at a time because readline() is unreliable.
-    Accumulates bytes until newline, then sends full line to parser.
+    Non-blocking stdin reader intended ONLY for standalone RUN MODE.
+    NEVER run this when a USB REPL (Thonny) is attached on Pico 2.
     """
 
     def __init__(self, parser: CommandParser):
@@ -60,26 +46,17 @@ class DebugConsole:
 
     def _poll_loop(self):
         buf = b""
-
         while self._running:
             try:
-                # Read exactly one character (non-blocking on Pico 2)
                 ch = sys.stdin.read(1)
-
                 if ch:
-                    # Convert str → bytes if needed
                     if isinstance(ch, str):
                         ch = ch.encode()
-
                     buf += ch
-
-                    # End of line detected
                     if ch in (b"\n", b"\r"):
                         self._parser.handle_line(buf)
                         buf = b""
-
                 time.sleep(0.01)
-
             except Exception as e:
                 print("DEBUG poll error:", e)
                 time.sleep(0.05)
@@ -87,10 +64,16 @@ class DebugConsole:
     def stop(self):
         self._running = False
 
+
 # ---------------------------------------------------------
 # REPL writer for debug mode
 # ---------------------------------------------------------
+
 class REPLWriter:
+    """
+    Simple wrapper that lets the parser "write to UART" by printing to REPL.
+    """
+
     def write(self, data):
         try:
             if isinstance(data, (bytes, bytearray, memoryview)):
@@ -101,29 +84,29 @@ class REPLWriter:
             print("REPLWriter error:", e)
             print(data)
 
+
 # ---------------------------------------------------------
-# Hardware initialization helpers
+# Hardware initialization
 # ---------------------------------------------------------
 
 def init_uart_for_run_mode():
     """
     Initialize UART0 for robot RUN MODE.
+    Adjust pins/baudrate if needed.
     """
-    uart = UART(0, baudrate=115200, tx=0, rx=1)  # adjust pins if needed
-    return uart
+    return UART(0, baudrate=115200, tx=0, rx=1)
 
 
 def init_motors():
     """
-    Initialize your DRV8871 motor drivers.
+    Initialize DRV8871 motor drivers.
     Adjust pin numbers to match your wiring.
     """
     steer_motor = DRV8871(in1_pin=18, in2_pin=19)
     drive_left = DRV8871(in1_pin=4, in2_pin=5)
     drive_right = DRV8871(in1_pin=27, in2_pin=28)
-
+    
     return steer_motor, drive_left, drive_right
-
 
 def init_encoders():
     
@@ -133,18 +116,17 @@ def init_encoders():
     
     return steer_encoder, drive_left_encoder, drive_right_encoder
 
-
 def init_led_and_watchdog():
     """
     Initialize status LED and watchdog.
     """
-    led = LEDStatus(pin=25)  # adjust LED pin if needed
-    wd = Watchdog(led_status=led)   # adjust args to match your Watchdog.__init__
+    led = LEDStatus(pin=25)
+    wd = Watchdog(led_status=led)
     return led, wd
 
 
 # ---------------------------------------------------------
-# Main loop for RUN MODE
+# RUN MODE loop
 # ---------------------------------------------------------
 
 def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
@@ -158,23 +140,66 @@ def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
                 line = uart.readline()
                 if line:
                     parser.handle_line(line)
-
-            # If your watchdog needs periodic calls, add them here.
-            # (Your current Watchdog does not require a tick method.)
-
         except Exception as e:
             print("RUN loop error:", e)
             time.sleep(0.05)
+
+
+# ---------------------------------------------------------
+# System status helper
+# ---------------------------------------------------------
+
+def system_status(parser=None, debug_console_running=False):
+    """
+    Print a snapshot of system state:
+      - USB / REPL status
+      - DebugConsole status
+      - Parser + motors + encoders
+    Safe to call anytime from REPL or code.
+    """
+    print("----- SYSTEM STATUS -----")
+
+    cls = sys.stdin.__class__.__name__
+    print("stdin class =", cls)
+    if cls in ("USB_VCP", "TextIOWrapper"):
+        print("USB_CONNECTED = True  (USB REPL active)")
+    else:
+        print("USB_CONNECTED = False (no USB REPL attached)")
+
+    print("DebugConsole running =", debug_console_running)
+
+    if parser is None:
+        print("Parser = None")
+    else:
+        print("Parser = OK")
+        print("  Left motor:", parser.left_motor)
+        print("  Right motor:", parser.right_motor)
+        print("  Steering motor:", parser.steering_motor)
+        print("  Left encoder:", parser.left_encoder)
+        print("  Right encoder:", parser.right_encoder)
+        print("  Steering encoder:", parser.steering_encoder)
+        print("  Verbose =", parser.verbose)
+
+    print("-------------------------")
+
 
 # ---------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------
 
-def main():
-    # Mode detection
+def main(enable_debug_console=False):
+    """
+    Main entry point for firmware.
+
+    Returns:
+        (parser, debug_console_running)
+    so you can introspect from REPL.
+    """
     USB_CONNECTED = is_usb_connected()
     print("USB_CONNECTED =", USB_CONNECTED)
     print("stdin class =", sys.stdin.__class__.__name__)
+
+    debug_console_running = False
 
     # Hardware setup
     led, watchdog = init_led_and_watchdog()
@@ -197,27 +222,36 @@ def main():
         left_encoder=drive_left_encoder,
         right_encoder=drive_right_encoder,
         steering_encoder=steer_encoder,
-        verbose=True
+        verbose=True,
     )
 
-    # Mode-specific behavior
+    # DEBUG MODE (USB REPL / Thonny)
     if USB_CONNECTED:
         print("DEBUG MODE: USB detected, REPL input active.")
-        
-        #if USB_CONNECTED and sys.stdin.__class__.__name__ == "TextIOWrapper":
-        #    DebugConsole(parser)
-
+        print("DebugConsole DISABLED in USB mode.")
         print("REPL ready. Type commands like ENC_STEER? directly.")
-        return
+        # No loops here; just return control to REPL
+        return parser, debug_console_running
 
-    else:
-        print("RUN MODE: Starting main loop.")
-        run_mode_loop(uart, parser, watchdog)
+    # RUN MODE (standalone robot)
+    print("RUN MODE: Starting main loop.")
+    if enable_debug_console:
+        print("Starting DebugConsole (RUN MODE only)...")
+        DebugConsole(parser)
+        debug_console_running = True
+
+    # This will not return in normal RUN MODE
+    run_mode_loop(uart, parser, watchdog)
+    # If you ever add an exit condition, you could return here:
+    # return parser, debug_console_running
 
 
 # ---------------------------------------------------------
-# Auto-run at import
+# No auto-run on import
 # ---------------------------------------------------------
-
-if __name__ == "__main__":
-    main()
+# IMPORTANT:
+# Do NOT call main() here. You must run it manually from Thonny:
+#   import firmware
+#   parser, dc = firmware.main()
+#
+# This keeps boot safe and avoids "device busy" traps.

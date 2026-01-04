@@ -22,8 +22,11 @@ class CommandParser:
         except:
             return
 
+        if cmd == "PYTHON":
+            raise KeyboardInterrupt
+
         # Closed-loop steering command
-        if cmd.startswith("STEER "):
+        elif cmd.startswith("STEER "):
             parts = cmd.split()
             if len(parts) == 2:
                 try:

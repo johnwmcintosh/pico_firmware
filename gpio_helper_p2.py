@@ -1,5 +1,4 @@
 import time
-import gpiod
 from machine import Pin, PWM
 
 class GPIOPin:
