@@ -45,4 +45,20 @@ class CommandParser:
             else:
                 self.uart.write(b"ERR NO_STEERING_ENCODER\n")
 
+    def update_steering(self):
+        pos, vel = self.steering_encoder.get_state()
+        error = self.steering_target - pos
 
+        # deadzone
+        if abs(error) < 2:
+            self.steering_motor.stop()
+            return
+
+        # proportional gain
+        k = 0.8  # tune this later
+        cmd = int(k * error)
+
+        # clamp
+        cmd = max(-100, min(100, cmd))
+
+        self.steering_motor.set_speed(cmd)

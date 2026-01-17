@@ -102,9 +102,9 @@ def init_motors():
     Initialize DRV8871 motor drivers.
     Adjust pin numbers to match your wiring.
     """
-    steer_motor = DRV8871(in1_pin=18, in2_pin=19)
-    drive_left = DRV8871(in1_pin=4, in2_pin=5)
-    drive_right = DRV8871(in1_pin=27, in2_pin=28)
+    steer_motor = DRV8871(pin_dir=16, pin_en=19)
+    drive_left  = DRV8871(pin_dir=5,  pin_en=4)
+    drive_right = DRV8871(pin_dir=28, pin_en=21)
     
     return steer_motor, drive_left, drive_right
 
@@ -130,20 +130,41 @@ def init_led_and_watchdog():
 # ---------------------------------------------------------
 
 def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
-    """
-    Main loop for robot RUN MODE, reading commands from UART.
-    """
     print("RUN MODE: Entering main loop.")
     while True:
         try:
+            print("RUN LOOP ACTIVE — NEW FIRMWARE")
+
+            # Handle incoming UART commands
             if uart.any():
                 line = uart.readline()
                 if line:
                     parser.handle_line(line)
+
+            # --- CLOSED LOOP STEERING CONTROL ---
+            if parser.steering_target is not None and parser.steering_encoder is not None:
+                current = parser.steering_encoder.get_position()
+                error = parser.steering_target - current
+
+                # Simple proportional control
+                Kp = 0.2  # tune this
+                speed = int(Kp * error)
+
+                # Clamp speed
+                speed = max(min(speed, 100), -100)
+
+                # Drive motor
+                parser.steering_motor.set_speed(speed)
+                
+                print("STEER LOOP:", current, parser.steering_target, error, speed)
+
+                # Stop if close enough
+                if abs(error) < 5:
+                    parser.steering_motor.set_speed(0)
+
         except Exception as e:
             print("RUN loop error:", e)
             time.sleep(0.05)
-
 
 # ---------------------------------------------------------
 # System status helper
