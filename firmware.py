@@ -104,7 +104,7 @@ def init_motors():
     """
     steer_motor = DRV8871(pin_dir=16, pin_en=19)
     drive_left  = DRV8871(pin_dir=5,  pin_en=4)
-    drive_right = DRV8871(pin_dir=28, pin_en=21)
+    drive_right = DRV8871(pin_dir=22, pin_en=28)
     
     return steer_motor, drive_left, drive_right
 
