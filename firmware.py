@@ -109,8 +109,7 @@ def init_motors():
     return steer_motor, drive_left, drive_right
 
 def init_encoders():
-    
-    steer_encoder = Encoder(pin_a=6, pin_b=7)
+    steer_encoder = Encoder(pin_a=6, pin_b=7, counts_per_lock=56, deg_per_lock=17.0)
     drive_left_encoder = Encoder(pin_a=8, pin_b=9)
     drive_right_encoder = Encoder(pin_a=10, pin_b=11)
     
@@ -123,7 +122,6 @@ def init_led_and_watchdog():
     led = LEDStatus(pin=25)
     wd = Watchdog(led_status=led)
     return led, wd
-
 
 # ---------------------------------------------------------
 # RUN MODE loop
@@ -140,27 +138,8 @@ def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
                 line = uart.readline()
                 if line:
                     parser.handle_line(line)
-
-            # --- CLOSED LOOP STEERING CONTROL ---
-            if parser.steering_target is not None and parser.steering_encoder is not None:
-                current = parser.steering_encoder.get_position()
-                error = parser.steering_target - current
-
-                # Simple proportional control
-                Kp = 0.2  # tune this
-                speed = int(Kp * error)
-
-                # Clamp speed
-                speed = max(min(speed, 100), -100)
-
-                # Drive motor
-                parser.steering_motor.set_speed(speed)
                 
-                print("STEER LOOP:", current, parser.steering_target, error, speed)
-
-                # Stop if close enough
-                if abs(error) < 5:
-                    parser.steering_motor.set_speed(0)
+                parser.emit_odometry(uart)
 
         except Exception as e:
             print("RUN loop error:", e)
@@ -226,7 +205,9 @@ def main(enable_debug_console=False):
     led, watchdog = init_led_and_watchdog()
     steer_motor, drive_left, drive_right = init_motors()
     steer_encoder, drive_left_encoder, drive_right_encoder = init_encoders()
-
+    
+    steer_encoder.zero()
+    
     # Mode-specific UART
     if USB_CONNECTED:
         uart = REPLWriter()
