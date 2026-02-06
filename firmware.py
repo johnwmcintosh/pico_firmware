@@ -1,6 +1,7 @@
 # firmware.py
 
 import sys
+import os
 import time
 import _thread
 import uselect
@@ -19,9 +20,8 @@ time.sleep(0.3)
 # ---------------------------------------------------------
 
 def is_usb_connected():
-    cls = sys.stdin.__class__.__name__
-    # Thonny shows up as TextIOWrapper
-    return cls == "TextIOWrapper"
+    # Query REPL stream for index 0
+    return os.dupterm(None, 0) is not None
 
 # ---------------------------------------------------------
 # Debug console (RUN MODE only, NEVER under Thonny)
@@ -96,7 +96,31 @@ class USBUART:
         if isinstance(data, str):
             data = data.encode()
         sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+
+class ModeBlinker:
+    def __init__(self, led, mode):
+        self.led = led
+        self.mode = mode
+        _thread.start_new_thread(self._loop, ())
+
+    def _loop(self):
+        while True:
+            if self.mode == "RUN":
+                # Fast double-blink
+                self.led.on()
+                time.sleep(0.1)
+                self.led.off()
+                time.sleep(0.1)
+                self.led.on()
+                time.sleep(0.1)
+                self.led.off()
+                time.sleep(0.7)
+            else:
+                # DEBUG MODE: slow single blink
+                self.led.on()
+                time.sleep(0.2)
+                self.led.off()
+                time.sleep(1.8)
 
 def init_uart_for_run_mode():
     """ 
@@ -142,9 +166,9 @@ def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
         try:
             # 1. Handle incoming UART commands
             if uart.any():
-                print("UART DATA AVAILABLE")
+                #print("UART DATA AVAILABLE")
                 line = uart.readline()
-                print("RAW:", line)
+                #print("RAW:", line)
                 if line:
                     parser.handle_line(line)
 
@@ -220,13 +244,13 @@ def main(enable_debug_console=False):
     so you can introspect from REPL.
     """
     USB_CONNECTED = is_usb_connected()
-    print("USB_CONNECTED =", USB_CONNECTED)
-    print("stdin class =", sys.stdin.__class__.__name__)
+    print("USB_CONNECTED =", USB_CONNECTED, "\n")
 
     debug_console_running = False
 
     # Hardware setup
-    led, watchdog = init_led_and_watchdog()
+    led, watchdog = init_led_and_watchdog() 
+    #ModeBlinker(led, "DEBUG" if USB_CONNECTED else "RUN") 
     steer_motor, drive_left, drive_right = init_motors()
     steer_encoder, drive_left_encoder, drive_right_encoder = init_encoders()
     
