@@ -17,10 +17,10 @@ class Watchdog:
         self.timer.init(period=self.timeout_ms, mode=Timer.PERIODIC, callback=self.callback)
         self._armed = True
 
-def reset(self):
-    if self._armed:
-        self.led_status.set_heartbeat()
-        self.timer.init(period=self.timeout_ms, mode=Timer.PERIODIC, callback=self.callback)
+    def reset(self):
+        if self._armed:
+            self.led_status.set_heartbeat()
+            self.timer.init(period=self.timeout_ms, mode=Timer.PERIODIC, callback=self.callback)
 
     def stop(self):
         self.timer.deinit()

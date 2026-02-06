@@ -1,3 +1,4 @@
+
 import math
 from encoder import Encoder
 
@@ -99,11 +100,13 @@ class CommandParser:
         max_speed = 1.0
         max_steer_deg = 17.0
 
-        if abs(angular) < 1e-6:
+        if abs(angular) < 1e-6 or abs(linear) < 1e-6:
             steer_deg = 0.0
         else:
-            steer_rad = math.atan(wheelbase * angular / linear)
+            steer_rad = math.atan((wheelbase * angular) / linear)
             steer_deg = max(min(math.degrees(steer_rad), max_steer_deg), -max_steer_deg)
+
+        self.steering_target = steer_deg
 
         left_speed = linear - (angular * track / 2)
         right_speed = linear + (angular * track / 2)
@@ -128,7 +131,7 @@ class CommandParser:
         assert self.left_encoder is not None
         assert self.right_encoder is not None
         assert self.steering_encoder is not None
-        
+
         left_m = self.left_encoder.distance_m()
         right_m = self.right_encoder.distance_m()
         steer_deg = self.steering_encoder.angle_deg_clamped()

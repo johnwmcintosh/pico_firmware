@@ -129,21 +129,36 @@ def init_led_and_watchdog():
 
 def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
     print("RUN MODE: Entering main loop.")
+    last_odom_ms = time.ticks_ms()
+
     while True:
         try:
-            print("RUN LOOP ACTIVE — NEW FIRMWARE")
-
-            # Handle incoming UART commands
+            # 1. Handle incoming UART commands
             if uart.any():
                 line = uart.readline()
                 if line:
                     parser.handle_line(line)
-                
+
+            # 2. Run steering PID loop ALWAYS
+            if parser.steering_target is not None:
+                parser.update_steering()
+
+            # 3. Emit odometry at ~20 Hz
+            now = time.ticks_ms()
+            if time.ticks_diff(now, last_odom_ms) > 50:
                 parser.emit_odometry(uart)
+                last_odom_ms = now
+
+            # 4. Watchdog
+            watchdog.reset()
+
+            # 5. Loop timing (~100 Hz)
+            time.sleep_ms(10)
 
         except Exception as e:
             print("RUN loop error:", e)
-            time.sleep(0.05)
+            time.sleep(50)
+
 
 # ---------------------------------------------------------
 # System status helper
