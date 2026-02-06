@@ -3,9 +3,7 @@
 import sys
 import time
 import _thread
-import select
-
-from machine import UART
+import uselect
 
 from encoder import Encoder
 from gpio_helper_p2 import DRV8871
@@ -21,13 +19,9 @@ time.sleep(0.3)
 # ---------------------------------------------------------
 
 def is_usb_connected():
-    """
-    Returns True if a USB REPL (Thonny/terminal) is active.
-    Does NOT mean "Pico is powered by USB".
-    """
     cls = sys.stdin.__class__.__name__
-    return cls in ("USB_VCP", "TextIOWrapper")
-
+    # Thonny shows up as TextIOWrapper
+    return cls == "TextIOWrapper"
 
 # ---------------------------------------------------------
 # Debug console (RUN MODE only, NEVER under Thonny)
@@ -84,18 +78,31 @@ class REPLWriter:
             print("REPLWriter error:", e)
             print(data)
 
-
 # ---------------------------------------------------------
 # Hardware initialization
 # ---------------------------------------------------------
+class USBUART:
+    def __init__(self):
+        self.poll = uselect.poll()
+        self.poll.register(sys.stdin, uselect.POLLIN)
+
+    def any(self):
+        return bool(self.poll.poll(0))
+
+    def readline(self):
+        return sys.stdin.buffer.readline()
+
+    def write(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
 
 def init_uart_for_run_mode():
-    """
-    Initialize UART0 for robot RUN MODE.
-    Adjust pins/baudrate if needed.
-    """
-    return UART(0, baudrate=115200, tx=0, rx=1)
-
+    """ 
+    In RUN MODE, use USB CDC (same link Thonny/ACM0 uses), not GPIO UART0.    
+    """ 
+    return USBUART() 
 
 def init_motors():
     """
@@ -135,7 +142,9 @@ def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
         try:
             # 1. Handle incoming UART commands
             if uart.any():
+                print("UART DATA AVAILABLE")
                 line = uart.readline()
+                print("RAW:", line)
                 if line:
                     parser.handle_line(line)
 
