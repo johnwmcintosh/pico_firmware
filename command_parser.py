@@ -53,22 +53,12 @@ class CommandParser:
             except Exception as e:
                 print("CMD parse error:", e)
 
-        elif cmd.startswith("STEER"):
-            if len(parts) == 2:
-                try:
-                    target = int(parts[1])
-                    self.steering_target = target
-                    self.uart.write(f"OK STEER {target}\n".encode())
-                except:
-                    self.uart.write(b"ERR\n")
-
-        elif cmd == "ENC_STEER?":
-            if self.steering_encoder is not None:
-                pos = self.steering_encoder.get_position()
-                vel = self.steering_encoder.get_velocity()
-                self.uart.write(f"ENC_STEER {pos} {vel}\n".encode())
+        elif cmd == "PRNT":
+            if parts[1].upper() == "ON":
+                self.verbose = True
             else:
-                self.uart.write(b"ERR NO_STEERING_ENCODER\n")
+                self.verbose = False
+
 
 # ---------------------------------------------------------
 # OPTIONAL STEERING PID
@@ -77,52 +67,50 @@ class CommandParser:
         assert self.steering_encoder is not None
         assert self.steering_target is not None
 
-        pos = self.steering_encoder.get_position()
-        vel = self.steering_encoder.get_velocity()
-        error = self.steering_target - pos
+        pos = self.steering_encoder.get_position()   # counts
+        error = self.steering_target - pos           # counts
 
         if abs(error) < 2:
             self.steering_motor.stop()
             return
 
         k = 0.8
-        cmd = int(k * error)
-        cmd = max(-100, min(100, cmd))
+        cmd = k * (error / self.steering_encoder.counts_per_lock)
+        cmd = max(-1.0, min(1.0, cmd))
 
         self.steering_motor.set_speed(cmd)
+
+        if self.verbose:
+            print("PICO steering PID: pos=", pos,
+                "target=", self.steering_target,
+                "error=", error,
+                "cmd=", f"{cmd:.2f}")
 
 # ---------------------------------------------------------
 # ROS CMD_VEL HANDLER
 # ---------------------------------------------------------
     def handle_cmd_vel(self, linear, angular):
-        wheelbase = 0.25
-        track = 0.18
-        max_speed = 1.0
+        throttle = max(min(linear, 1.0), -1.0)
+        self.left_motor.set_speed(throttle)
+        self.right_motor.set_speed(throttle)
+
         max_steer_deg = 17.0
+        steer_deg = angular * max_steer_deg
 
-        if abs(angular) < 1e-6 or abs(linear) < 1e-6:
-            steer_deg = 0.0
+        # convert degrees → counts
+        max_steer_deg = 17.0
+        steer_deg = angular * max_steer_deg
+
+        if self.steering_encoder is not None:
+            # convert degrees → counts using the encoder’s calibration
+            target_counts = steer_deg / self.steering_encoder.deg_per_count
+            self.steering_target = target_counts
         else:
-            steer_rad = math.atan((wheelbase * angular) / linear)
-            steer_deg = max(min(math.degrees(steer_rad), max_steer_deg), -max_steer_deg)
+            self.steering_target = None
 
-        self.steering_target = steer_deg
-
-        left_speed = linear - (angular * track / 2)
-        right_speed = linear + (angular * track / 2)
-
-        left_speed = max(min(left_speed, max_speed), -max_speed)
-        right_speed = max(min(right_speed, max_speed), -max_speed)
-
-        left_pwm = int(left_speed * 100)
-        right_pwm = int(right_speed * 100)
-
-        self.left_motor.set_speed(left_pwm)
-        self.right_motor.set_speed(right_pwm)
-        self.steering_motor.set_angle_deg(steer_deg)
 
         if self.verbose:
-            print(f"[CMD] lin={linear:.2f} ang={angular:.2f} → L={left_pwm} R={right_pwm} steer={steer_deg:.1f}")
+            print(f"[CMD] throttle={throttle:.2f} steer_deg={steer_deg:.1f}")
 
 # ---------------------------------------------------------
 # ODOMETRY EMISSION

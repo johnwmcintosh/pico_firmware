@@ -1,27 +1,25 @@
-from machine import Timer
+import time
 from led_manager import LEDStatus
 
 class Watchdog:
-    def __init__(self, timeout_ms=2000, callback=None, led_status: LEDStatus | None = None):
-        self.timer = Timer()
+    def __init__(self, timeout_ms=2000, led_status=None):
         self.timeout_ms = timeout_ms
-        self.callback = callback or self._default_callback
+        self.led_status = led_status or LEDStatus()
+        self.last_reset = time.ticks_ms()
         self._armed = False
-        self.led_status: LEDStatus = led_status or LEDStatus()
-
-    def _default_callback(self, t):
-        self.led_status.set_watchdog()
-        print("Watchdog timeout – no callback provided")
 
     def start(self):
-        self.timer.init(period=self.timeout_ms, mode=Timer.PERIODIC, callback=self.callback)
+        self.last_reset = time.ticks_ms()
         self._armed = True
 
     def reset(self):
         if self._armed:
+            self.last_reset = time.ticks_ms()
             self.led_status.set_heartbeat()
-            self.timer.init(period=self.timeout_ms, mode=Timer.PERIODIC, callback=self.callback)
 
-    def stop(self):
-        self.timer.deinit()
-        self._armed = False
+    def check(self):
+        if self._armed:
+            if time.ticks_diff(time.ticks_ms(), self.last_reset) > self.timeout_ms:
+                self.led_status.set_watchdog()
+                print("Watchdog timeout!")
+                # You can add motor stop logic here if needed

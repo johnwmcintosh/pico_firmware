@@ -1,5 +1,11 @@
 from machine import Pin, PWM
 
+VERBOSE = False
+
+def dbg(*args, **kwargs):
+    if VERBOSE:
+        print(*args, **kwargs)
+
 class DRV8871:
     def __init__(self, pin_dir, pin_en):
         # pin_en -> IN1 (PWM)
@@ -10,37 +16,38 @@ class DRV8871:
 
         self.MIN_DUTY = 59
         self.MAX_DUTY = 100
+        self.MIN_FORWARD_PWM = 0.18 # pct of max duty for forward motion
+        self.MIN_REVERSE_PWM = 0.18 # pct of max duty for reverse motion (reverse needs more power to overcome friction)
 
         self.stop()
 
     def set_speed(self, speed):
-        # Clamp logical speed
-        speed = max(min(speed, 100), -100)
+        # Clamp input to [-1.0, 1.0]
+        speed = max(min(speed, 1.0), -1.0)
 
         if speed == 0:
-            print("set_speed: 0 → stop")
-            self.stop()
+            self.pwm.duty_u16(0)
+            self.in2.value(0)
             return
 
-        # Direction + debug label
+        # Determine direction and duty
         if speed > 0:
-            self.in2.value(0)
+            duty_percent = max(abs(speed), self.MIN_FORWARD_PWM)
+            self.in2.value(0)   # forward
             direction = "FWD"
         else:
-            self.in2.value(1)
+            duty_percent = max(abs(speed), self.MIN_REVERSE_PWM)
+            self.in2.value(1)   # reverse
             direction = "REV"
 
-        # Map logical magnitude (0–100) into physical duty range (MIN_DUTY–MAX_DUTY)
-        mag = abs(speed) / 100.0
-        duty_percent = self.MIN_DUTY + mag * (self.MAX_DUTY - self.MIN_DUTY)
-        duty_u16 = int((duty_percent / 100.0) * 65535)
+        # Convert percent → 16‑bit PWM
+        pwm = int(duty_percent * 65535)
 
-        print("set_speed:", speed,
-              "dir=", direction,
-              "duty%=", duty_percent,
-              "duty_u16=", duty_u16)
+        # Apply PWM
+        self.pwm.duty_u16(pwm)
 
-        self.pwm.duty_u16(duty_u16)
+        # Optional debug
+        dbg("set_speed:", speed, "dir=", direction, "duty%=", duty_percent, "pwm=", pwm)
 
     def stop(self):
         self.pwm.duty_u16(0)

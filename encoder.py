@@ -12,9 +12,9 @@ class Encoder:
         self.velocity = 0
 
         # steering‑specific calibration 
-        self.counts_per_lock = counts_per_lock 
-        self.deg_per_lock = deg_per_lock 
-        self.deg_per_count = deg_per_lock / counts_per_lock
+        self.counts_per_lock = counts_per_lock
+        self.deg_per_lock = deg_per_lock
+        self.deg_per_count: float = deg_per_lock / counts_per_lock
 
         # drive motor calibration
         self.counts_per_rev = 199
@@ -34,7 +34,7 @@ class Encoder:
         
         # For steering encoder, clamp position within limits of the steering apparatus
         self.clamp_position()
-    
+
     def zero(self): 
         self.position = 0 
     

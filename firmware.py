@@ -4,16 +4,20 @@ import sys
 import os
 import time
 import _thread
-import uselect
 
+from machine import UART
 from encoder import Encoder
 from gpio_helper_p2 import DRV8871
 from led_manager import LEDStatus
 from watchdog import Watchdog
 from command_parser import CommandParser
 
-print(">>> firmware.py STARTED <<<")
-time.sleep(0.3)
+VERBOSE = False
+
+def dbg(*args, **kwargs):
+    if VERBOSE:
+        print(*args, **kwargs)
+        time.sleep(0.3)
 
 # ---------------------------------------------------------
 # USB / mode detection
@@ -52,7 +56,7 @@ class DebugConsole:
                         buf = b""
                 time.sleep(0.01)
             except Exception as e:
-                print("DEBUG poll error:", e)
+                dbg("DEBUG poll error:", e)
                 time.sleep(0.05)
 
     def stop(self):
@@ -81,22 +85,6 @@ class REPLWriter:
 # ---------------------------------------------------------
 # Hardware initialization
 # ---------------------------------------------------------
-class USBUART:
-    def __init__(self):
-        self.poll = uselect.poll()
-        self.poll.register(sys.stdin, uselect.POLLIN)
-
-    def any(self):
-        return bool(self.poll.poll(0))
-
-    def readline(self):
-        return sys.stdin.buffer.readline()
-
-    def write(self, data):
-        if isinstance(data, str):
-            data = data.encode()
-        sys.stdout.buffer.write(data)
-
 class ModeBlinker:
     def __init__(self, led, mode):
         self.led = led
@@ -123,10 +111,13 @@ class ModeBlinker:
                 time.sleep(1.8)
 
 def init_uart_for_run_mode():
-    """ 
-    In RUN MODE, use USB CDC (same link Thonny/ACM0 uses), not GPIO UART0.    
-    """ 
-    return USBUART() 
+    """
+    In RUN MODE, use hardware UART0 on GPIO pins (GP0=TX, GP1=RX).
+    This avoids USB CDC blocking issues on Pico 2 and ensures
+    non-blocking, real-time-safe communication with the ROS bridge.
+    """
+    return UART(0, baudrate=115200, tx=0, rx=1)
+
 
 def init_motors():
     """
@@ -158,17 +149,17 @@ def init_led_and_watchdog():
 # RUN MODE loop
 # ---------------------------------------------------------
 
-def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
-    print("RUN MODE: Entering main loop.")
+def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog, led: LEDStatus):
+    dbg("RUN MODE: Entering main loop.")
     last_odom_ms = time.ticks_ms()
 
     while True:
         try:
             # 1. Handle incoming UART commands
             if uart.any():
-                #print("UART DATA AVAILABLE")
+                dbg("UART DATA AVAILABLE")
                 line = uart.readline()
-                #print("RAW:", line)
+                dbg("RAW:", line)
                 if line:
                     parser.handle_line(line)
 
@@ -184,6 +175,8 @@ def run_mode_loop(uart, parser: CommandParser, watchdog: Watchdog):
 
             # 4. Watchdog
             watchdog.reset()
+            watchdog.check()
+            led.update()
 
             # 5. Loop timing (~100 Hz)
             time.sleep_ms(10)
@@ -235,34 +228,28 @@ def system_status(parser=None, debug_console_running=False):
 # Entry point
 # ---------------------------------------------------------
 
-def main(enable_debug_console=False):
-    """
-    Main entry point for firmware.
+def main(enable_debug_console=False, force_run_mode=True):
+    dbg(">>> firmware.py STARTED <<<")
 
-    Returns:
-        (parser, debug_console_running)
-    so you can introspect from REPL.
-    """
-    USB_CONNECTED = is_usb_connected()
-    print("USB_CONNECTED =", USB_CONNECTED, "\n")
+    if force_run_mode:
+        USB_CONNECTED = False
+    else:
+        USB_CONNECTED = is_usb_connected()
+
+    dbg("USB_CONNECTED =", USB_CONNECTED, "\n")
 
     debug_console_running = False
 
-    # Hardware setup
-    led, watchdog = init_led_and_watchdog() 
-    #ModeBlinker(led, "DEBUG" if USB_CONNECTED else "RUN") 
+    led, watchdog = init_led_and_watchdog()
     steer_motor, drive_left, drive_right = init_motors()
     steer_encoder, drive_left_encoder, drive_right_encoder = init_encoders()
-    
     steer_encoder.zero()
-    
-    # Mode-specific UART
+
     if USB_CONNECTED:
         uart = REPLWriter()
     else:
         uart = init_uart_for_run_mode()
 
-    # Create parser and inject dependencies
     parser = CommandParser(
         uart=uart,
         left_motor=drive_left,
@@ -275,25 +262,20 @@ def main(enable_debug_console=False):
         verbose=True,
     )
 
-    # DEBUG MODE (USB REPL / Thonny)
     if USB_CONNECTED:
         print("DEBUG MODE: USB detected, REPL input active.")
         print("DebugConsole DISABLED in USB mode.")
         print("REPL ready. Type commands like ENC_STEER? directly.")
-        # No loops here; just return control to REPL
         return parser, debug_console_running
 
-    # RUN MODE (standalone robot)
     print("RUN MODE: Starting main loop.")
+    watchdog.start()          # <-- only start watchdog in RUN MODE
     if enable_debug_console:
         print("Starting DebugConsole (RUN MODE only)...")
         DebugConsole(parser)
         debug_console_running = True
 
-    # This will not return in normal RUN MODE
-    run_mode_loop(uart, parser, watchdog)
-    # If you ever add an exit condition, you could return here:
-    # return parser, debug_console_running
+    run_mode_loop(uart, parser, watchdog, led)
 
 
 # ---------------------------------------------------------
