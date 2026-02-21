@@ -21,7 +21,7 @@ class DRV8871:
 
         self.stop()
 
-    def set_speed(self, speed):
+    def set_power(self, speed):
         # Clamp input to [-1.0, 1.0]
         speed = max(min(speed, 1.0), -1.0)
 
@@ -47,7 +47,7 @@ class DRV8871:
         self.pwm.duty_u16(pwm)
 
         # Optional debug
-        dbg("set_speed:", speed, "dir=", direction, "duty%=", duty_percent, "pwm=", pwm)
+        dbg("set_power:", speed, "dir=", direction, "duty%=", duty_percent, "pwm=", pwm)
 
     def stop(self):
         self.pwm.duty_u16(0)

@@ -1,5 +1,4 @@
 
-import math
 from encoder import Encoder
 
 class CommandParser:
@@ -26,6 +25,8 @@ class CommandParser:
 # MAIN LINE PARSER
 # ---------------------------------------------------------
     def handle_line(self, line):
+        print("HANDLE:", line)
+
         try:
             if isinstance(line, (bytes, bytearray)):
                 line = line.decode().strip()
@@ -60,12 +61,15 @@ class CommandParser:
                 self.verbose = False
 
 
-# ---------------------------------------------------------
-# OPTIONAL STEERING PID
-# ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # OPTIONAL STEERING PID
+    # ---------------------------------------------------------
     def update_steering(self):
-        assert self.steering_encoder is not None
-        assert self.steering_target is not None
+        # Be defensive: never kill the firmware over steering
+        if self.steering_encoder is None:
+            return
+        if self.steering_target is None:
+            return
 
         pos = self.steering_encoder.get_position()   # counts
         error = self.steering_target - pos           # counts
@@ -78,7 +82,7 @@ class CommandParser:
         cmd = k * (error / self.steering_encoder.counts_per_lock)
         cmd = max(-1.0, min(1.0, cmd))
 
-        self.steering_motor.set_speed(cmd)
+        self.steering_motor.set_power(cmd)
 
         if self.verbose:
             print("PICO steering PID: pos=", pos,
@@ -86,31 +90,53 @@ class CommandParser:
                 "error=", error,
                 "cmd=", f"{cmd:.2f}")
 
-# ---------------------------------------------------------
-# ROS CMD_VEL HANDLER
-# ---------------------------------------------------------
+
+    # ---------------------------------------------------------
+    # ROS CMD_VEL HANDLER
+    # ---------------------------------------------------------
     def handle_cmd_vel(self, linear, angular):
+        # Clamp inputs
         throttle = max(min(linear, 1.0), -1.0)
-        self.left_motor.set_speed(throttle)
-        self.right_motor.set_speed(throttle)
+        steering = max(min(angular, 1.0), -1.0)
 
-        max_steer_deg = 17.0
-        steer_deg = angular * max_steer_deg
+        # --- DRIVE MOTOR MIXING ---
+        left_cmd  = throttle - steering
+        right_cmd = throttle + steering
 
-        # convert degrees → counts
+        # Normalize if needed
+        max_mag = max(abs(left_cmd), abs(right_cmd), 1.0)
+        left_cmd  /= max_mag
+        right_cmd /= max_mag
+
+        self.left_motor.set_power(left_cmd)
+        self.right_motor.set_power(right_cmd)
+
+        # --- STEERING TARGET (PID) ---
         max_steer_deg = 17.0
-        steer_deg = angular * max_steer_deg
+        steer_deg = steering * max_steer_deg
 
         if self.steering_encoder is not None:
-            # convert degrees → counts using the encoder’s calibration
-            target_counts = steer_deg / self.steering_encoder.deg_per_count
-            self.steering_target = target_counts
+            try:
+                target_counts = steer_deg / self.steering_encoder.deg_per_count
+                self.steering_target = target_counts
+            except Exception as e:
+                if self.verbose:
+                    print("Steering target error:", e)
+                self.steering_target = None
         else:
             self.steering_target = None
 
+        # Try to move steering, but never die
+        try:
+            self.update_steering()
+        except Exception as e:
+            if self.verbose:
+                print("update_steering error:", e)
 
         if self.verbose:
-            print(f"[CMD] throttle={throttle:.2f} steer_deg={steer_deg:.1f}")
+            print(f"[CMD] throttle={throttle:.2f} steering={steering:.2f} "
+                f"left={left_cmd:.2f} right={right_cmd:.2f} "
+                f"steer_deg={steer_deg:.1f}")
 
 # ---------------------------------------------------------
 # ODOMETRY EMISSION
@@ -124,4 +150,5 @@ class CommandParser:
         right_m = self.right_encoder.distance_m()
         steer_deg = self.steering_encoder.angle_deg_clamped()
 
-        uart.write(f"ODOM {left_m:.5f} {right_m:.5f} {steer_deg:.2f}\n")
+        if abs(left_m) > 0.000 or abs(right_m) > 0.000 or abs(steer_deg) > 0.00:
+            uart.write(f"ODOM {left_m:.5f} {right_m:.5f} {steer_deg:.2f}\n")
