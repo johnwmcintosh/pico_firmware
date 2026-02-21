@@ -63,50 +63,50 @@ def init_led_and_watchdog():
 
 
 def run_mode_loop(uart, parser, watchdog, led):
-    last_odom_ms = time.ticks_ms()
-    last_heartbeat = time.ticks_ms()
+    LOOP_PERIOD_MS = 20   # 50 Hz
+    last_loop = time.ticks_ms()
+    last_odom = last_loop
+    last_heartbeat = last_loop
 
     while True:
-        try:
-            # --- UART INPUT ---
-            print(print(time.ticks_ms())
-)
-            print("A")
-            line = uart.readline()
-            if line:
-                try:
-                    decoded = line.decode().strip()
-                except UnicodeError:
-                    decoded = ""
+        loop_start = time.ticks_ms()
 
-                if decoded.startswith("CMD"):
-                    parser.handle_line(decoded)
+        try:
+            # --- NON-BLOCKING UART READ ---
+            if uart.any():
+                line = uart.readline()
+                if line:
+                    try:
+                        decoded = line.decode().strip()
+                    except UnicodeError:
+                        decoded = ""
+                    if decoded.startswith("CMD"):
+                        parser.handle_line(decoded)
 
             # --- STEERING ---
-            print("B")
             if parser.steering_target is not None:
                 parser.update_steering()
 
-            # --- ODOMETRY ---
-            print("C")
+            # --- ODOMETRY @ 20 Hz ---
             now = time.ticks_ms()
-            if time.ticks_diff(now, last_odom_ms) > 50:
+            if time.ticks_diff(now, last_odom) >= 50:
                 parser.emit_odometry(uart)
-                last_odom_ms = now
+                last_odom = now
+
+            # --- HEARTBEAT @ 1 Hz ---
+            if time.ticks_diff(now, last_heartbeat) >= 1000:
+                uart.write(b"HEARTBEAT\n")
+                last_heartbeat = now
 
             # --- HOUSEKEEPING ---
-            print("D")
             watchdog.reset()
             watchdog.check()
             led.update()
 
-            # --- HEARTBEAT @ 1 Hz ---
-            print("E")
-            if time.ticks_diff(now, last_heartbeat) > 1000:
-                uart.write(b"HEARTBEAT\n")
-                last_heartbeat = now
-
-           
+            # --- FIXED LOOP TIMING ---
+            elapsed = time.ticks_diff(time.ticks_ms(), loop_start)
+            if elapsed < LOOP_PERIOD_MS:
+                time.sleep_ms(LOOP_PERIOD_MS - elapsed)
 
         except Exception as e:
             uart.write(b"RUN loop error\n")
