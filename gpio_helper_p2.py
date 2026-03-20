@@ -1,54 +1,84 @@
 from machine import Pin, PWM
 
-VERBOSE = False
-
-def dbg(*args, **kwargs):
-    if VERBOSE:
-        print(*args, **kwargs)
 
 class DRV8871:
-    def __init__(self, pin_dir, pin_en):
-        # pin_en -> IN1 (PWM)
-        # pin_dir -> IN2 (direction)
-        self.in2 = Pin(pin_dir, Pin.OUT)     # Direction
-        self.pwm = PWM(Pin(pin_en))          # Speed via PWM on IN1
-        self.pwm.freq(20000)                 # 20 kHz is a good quiet value
+    def __init__(self, pin_in1: int, pin_in2: int):
+        # Store pin numbers
+        self.pin_in1 = pin_in1
+        self.pin_in2 = pin_in2
 
-        self.MIN_DUTY = 59
-        self.MAX_DUTY = 100
-        self.MIN_FORWARD_PWM = 0.18 # pct of max duty for forward motion
-        self.MIN_REVERSE_PWM = 0.18 # pct of max duty for reverse motion (reverse needs more power to overcome friction)
+        # Create output pins
+        self.in1 = Pin(pin_in1, Pin.OUT)
+        self.in2 = Pin(pin_in2, Pin.OUT)
 
-        self.stop()
+        # Create PWM object for typing; immediately disable it
+        self.pwm = PWM(self.in1)
+        self.pwm.deinit()
+        self.pwm_active = False
+        self.pwm_pin_num = None
 
-    def set_power(self, speed):
-        # Clamp input to [-1.0, 1.0]
-        speed = max(min(speed, 1.0), -1.0)
+        # Start in brake mode (both HIGH)
+        self.in1.high()
+        self.in2.high()
 
-        if speed == 0:
-            self.pwm.duty_u16(0)
-            self.in2.value(0)
+    # ------------------------------------------------------------
+    def _release_pwm(self) -> None:
+        """Stop PWM and return the pin to a LOW output state."""
+        if self.pwm_active:
+            self.pwm.deinit()
+            self.pwm_active = False
+
+        if self.pwm_pin_num is not None:
+            Pin(self.pwm_pin_num, Pin.OUT).low()
+            self.pwm_pin_num = None
+
+    # ------------------------------------------------------------
+    def _attach_pwm(self, pin_num: int) -> None:
+        """Attach PWM to the given pin, ensuring it starts LOW."""
+        self._release_pwm()
+
+        # Ensure pin is LOW before PWM takes over
+        Pin(pin_num, Pin.OUT).low()
+
+        pwm_pin = Pin(pin_num, Pin.OUT)
+        self.pwm = PWM(pwm_pin)
+        self.pwm.freq(20000)
+        self.pwm_active = True
+        self.pwm_pin_num = pin_num
+
+    # ------------------------------------------------------------
+    def stop(self) -> None:
+        """Brake mode: both pins HIGH."""
+        self._release_pwm()
+        self.in1.high()
+        self.in2.high()
+
+    # ------------------------------------------------------------
+    # Compatibility with old parser API
+    def set_raw_power(self, value: float) -> None:
+        self.set_power(value)
+
+    # ------------------------------------------------------------
+    def set_power(self, power: float) -> None:
+        """Set motor power in range [-1.0, 1.0]."""
+        power = max(min(power, 1.0), -1.0)
+
+        if power == 0:
+            self.stop()
             return
 
-        # Determine direction and duty
-        if speed > 0:
-            duty_percent = max(abs(speed), self.MIN_FORWARD_PWM)
-            self.in2.value(0)   # forward
-            direction = "FWD"
+        duty = int(abs(power) * 65535)
+
+        if power > 0:
+            # Forward: IN1 = HIGH, PWM on IN2
+            Pin(self.pin_in1, Pin.OUT).high()
+            Pin(self.pin_in2, Pin.OUT).low()
+            self._attach_pwm(self.pin_in2)
+            self.pwm.duty_u16(duty)
+
         else:
-            duty_percent = max(abs(speed), self.MIN_REVERSE_PWM)
-            self.in2.value(1)   # reverse
-            direction = "REV"
-
-        # Convert percent → 16‑bit PWM
-        pwm = int(duty_percent * 65535)
-
-        # Apply PWM
-        self.pwm.duty_u16(pwm)
-
-        # Optional debug
-        dbg("set_power:", speed, "dir=", direction, "duty%=", duty_percent, "pwm=", pwm)
-
-    def stop(self):
-        self.pwm.duty_u16(0)
-        self.in2.value(0)
+            # Reverse: IN2 = HIGH, PWM on IN1
+            Pin(self.pin_in2, Pin.OUT).high()
+            Pin(self.pin_in1, Pin.OUT).low()
+            self._attach_pwm(self.pin_in1)
+            self.pwm.duty_u16(duty)

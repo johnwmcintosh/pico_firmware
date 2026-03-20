@@ -1,12 +1,12 @@
-
-from encoder import Encoder
+from encoder import SteeringEncoder, DrivingEncoder
 
 class CommandParser:
     def __init__(self, uart, left_motor, right_motor, steering_motor, watchdog,
-        left_encoder: Encoder | None = None,
-        right_encoder: Encoder | None = None,
-        steering_encoder: Encoder | None = None,
-        verbose=False):
+                 left_encoder: DrivingEncoder | None = None,
+                 right_encoder: DrivingEncoder | None = None,
+                 steering_encoder: SteeringEncoder | None = None,
+                 steering_target: float | None = None,
+                 verbose=True):
 
         self.uart = uart
         self.left_motor = left_motor
@@ -18,14 +18,17 @@ class CommandParser:
         self.right_encoder = right_encoder
         self.steering_encoder = steering_encoder
 
-        self.steering_target = None
+        # normalized steering target (-1.0 .. +1.0)
+        self.steering_target = steering_target
+
         self.verbose = verbose
 
-# ---------------------------------------------------------
-# MAIN LINE PARSER
-# ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # MAIN LINE PARSER
+    # ---------------------------------------------------------
     def handle_line(self, line):
-        print("HANDLE:", line)
+        #print("HANDLE:", line)
+        print("RUNTIME STEER MOTOR:", self.steering_motor.pin_in1, self.steering_motor.pin_in2)
 
         try:
             if isinstance(line, (bytes, bytearray)):
@@ -50,58 +53,139 @@ class CommandParser:
             try:
                 linear = float(parts[1])
                 angular = float(parts[2])
-                self.handle_cmd_vel(linear, angular)
+                self.update_driving_stick(linear)
+                self.update_steering_stick(angular)
             except Exception as e:
                 print("CMD parse error:", e)
 
         elif cmd == "PRNT":
-            if parts[1].upper() == "ON":
-                self.verbose = True
-            else:
-                self.verbose = False
-
+            self.verbose = (parts[1].upper() == "ON")
 
     # ---------------------------------------------------------
-    # OPTIONAL STEERING PID
+    # STEERING PID (normalized)
     # ---------------------------------------------------------
-    def update_steering(self):
-        # Be defensive: never kill the firmware over steering
+    def update_steering_stick(self, x):
+        # x in [-1, 1]
+        DEAD = 0.05
+        p_min = 0.60   # minimum effective PWM (motor starts moving)
+        p_max = 0.80   # safe max for rack
+
+        ax = abs(x)
+
+        # Deadband
+        if ax < DEAD:
+            self.steering_motor.stop()
+            return
+        
+        pwr = 1 - ax
+
+        # Map |x| from [DEAD, 1] -> [p_min, p_max]
+        t = (pwr - DEAD) / (1.0 - DEAD)
+        power = p_min + t * (p_max - p_min)
+
+        # Restore direction
+        if x < 0:
+            power = -power
+
+        print("x:", x, "steering power:", power)
+        self.steering_motor.set_power(power)
+
+    def update_steering_pid(self):
         if self.steering_encoder is None:
             return
         if self.steering_target is None:
             return
 
-        pos = self.steering_encoder.get_position()   # counts
-        error = self.steering_target - pos           # counts
+        current = self.steering_encoder.get_angle()   # -1..1
+        error = self.steering_target - current
 
-        if abs(error) < 2:
+        # ---------------------------------------------------------
+        # DEADZONE: prevent jitter when nearly correct
+        # ---------------------------------------------------------
+        if abs(error) < 0.03:
             self.steering_motor.stop()
             return
 
-        k = 0.8
-        cmd = k * (error / self.steering_encoder.counts_per_lock)
+        # ---------------------------------------------------------
+        # PROPORTIONAL CONTROL
+        # ---------------------------------------------------------
+        k = 1.0
+        cmd = k * error
+
+        # ---------------------------------------------------------
+        # OUTPUT SHAPING: soften small corrections
+        # ---------------------------------------------------------
+        if abs(cmd) < 0.25:
+            cmd *= 0.5
+
+        # ---------------------------------------------------------
+        # RATE LIMITING: prevents sudden jerks
+        # ---------------------------------------------------------
+        max_step = 0.12
+        cmd = max(min(cmd, max_step), -max_step)
+
+        # ---------------------------------------------------------
+        # SAFETY: never push past mechanical limits
+        # ---------------------------------------------------------
+        if abs(current) >= 1.0 and (error * current) > 0:
+            self.steering_motor.stop()
+            return
+
+        # ---------------------------------------------------------
+        # FINAL CLAMP
+        # ---------------------------------------------------------
         cmd = max(-1.0, min(1.0, cmd))
 
         self.steering_motor.set_power(cmd)
 
         if self.verbose:
-            print("PICO steering PID: pos=", pos,
-                "target=", self.steering_target,
-                "error=", error,
+            print("STEER PID:",
+                "current=", f"{current:.2f}",
+                "target=", f"{self.steering_target:.2f}",
+                "error=", f"{error:.2f}",
                 "cmd=", f"{cmd:.2f}")
-
 
     # ---------------------------------------------------------
     # ROS CMD_VEL HANDLER
     # ---------------------------------------------------------
-    def handle_cmd_vel(self, linear, angular):
+    def update_driving_stick(self, linear):
+        # x in [-1, 1]
+        DEAD = 0.00
+        p_min = 0.01   # minimum effective PWM (motor starts moving)
+        p_max = 0.99   # safe max for rack
+    
+        x = linear
+        ax = abs(x)
+
+        # Deadband
+        if ax < .01:
+            self.left_motor.stop()
+            self.right_motor.stop()
+            return
+        
+        pwr = 1 - ax
+
+        # Map |x| from [DEAD, 1] -> [p_min, p_max]
+        t = (pwr - DEAD) / (1.0 - DEAD)
+        power = p_min + t * (p_max - p_min)
+
+        # Restore direction
+        if x > 0:
+            power = -power
+
+        print("x:", x, "drive power:", power)
+        self.left_motor.set_power(power)
+        self.right_motor.set_power(power)
+    
+
+    def handle_cmd_vel_pid(self, linear, angular):
         # Clamp inputs
         throttle = max(min(linear, 1.0), -1.0)
         steering = max(min(angular, 1.0), -1.0)
 
         # --- DRIVE MOTOR MIXING ---
-        left_cmd  = throttle - steering
-        right_cmd = throttle + steering
+        left_cmd  = throttle
+        right_cmd = throttle
 
         # Normalize if needed
         max_mag = max(abs(left_cmd), abs(right_cmd), 1.0)
@@ -111,36 +195,44 @@ class CommandParser:
         self.left_motor.set_power(left_cmd)
         self.right_motor.set_power(right_cmd)
 
-        # --- STEERING TARGET (PID) ---
-        max_steer_deg = 17.0
-        steer_deg = steering * max_steer_deg
+        # --- STEERING TARGET (normalized) ---
+        self.steering_target = -steering  # invert if needed
+        
+        # steering input from ROS/gamepad is already -1..1
+        desired = -steering   # invert if needed
 
-        if self.steering_encoder is not None:
-            try:
-                target_counts = steer_deg / self.steering_encoder.deg_per_count
-                self.steering_target = target_counts
-            except Exception as e:
-                if self.verbose:
-                    print("Steering target error:", e)
-                self.steering_target = None
-        else:
-            self.steering_target = None
+        # SNAP-TO-CENTER when stick released
+        if abs(desired) < 0.05:
+            desired = 0.0
+
+        # SMOOTH TARGET: prevents instant jumps
+        alpha = 0.25
+        self.steering_target = (
+            self.steering_target * (1 - alpha) + desired * alpha
+        )
+
+        print(
+            "steer_norm: ",
+            self.steering_target
+        )
 
         # Try to move steering, but never die
         try:
-            self.update_steering()
+            self.update_steering_pid()
         except Exception as e:
             if self.verbose:
                 print("update_steering error:", e)
 
         if self.verbose:
-            print(f"[CMD] throttle={throttle:.2f} steering={steering:.2f} "
-                f"left={left_cmd:.2f} right={right_cmd:.2f} "
-                f"steer_deg={steer_deg:.1f}")
+            print(
+                "[CMD] throttle= ", throttle," steering= ",steering,
+                "left= ",left_cmd," right= ",right_cmd,
+                " steer_target= ",self.steering_target
+            )
 
-# ---------------------------------------------------------
-# ODOMETRY EMISSION
-# ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # ODOMETRY EMISSION
+    # ---------------------------------------------------------
     def emit_odometry(self, uart):
         assert self.left_encoder is not None
         assert self.right_encoder is not None
@@ -148,7 +240,8 @@ class CommandParser:
 
         left_m = self.left_encoder.distance_m()
         right_m = self.right_encoder.distance_m()
-        steer_deg = self.steering_encoder.angle_deg_clamped()
+        steer_angle = self.steering_encoder.get_angle()  # normalized
 
-        if abs(left_m) > 0.000 or abs(right_m) > 0.000 or abs(steer_deg) > 0.00:
-            uart.write(f"ODOM {left_m:.5f} {right_m:.5f} {steer_deg:.2f}\n")
+        uart.write(
+            f"ODOM {left_m:.5f} {right_m:.5f} {steer_angle:.3f}\r\n"
+        )

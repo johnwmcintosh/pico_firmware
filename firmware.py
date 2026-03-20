@@ -1,18 +1,14 @@
-# firmware.py
-
 import time
-import asyncio
-import _thread
-from machine import UART
+import uasyncio as asyncio
+from machine import UART, Pin
 
 from led_manager import LEDStatus, startup_blink, enter_error_mode
 from watchdog import Watchdog
 
-from encoder import Encoder
+from encoder import DrivingEncoder, SteeringEncoder
 from gpio_helper_p2 import DRV8871
 from command_parser import CommandParser
 
-import uasyncio as asyncio
 
 class ModeBlinker:
     def __init__(self, led, mode: str):
@@ -39,20 +35,20 @@ class ModeBlinker:
 
 
 def init_uart_for_run_mode():
-    return UART(0, baudrate=115200, tx=0, rx=1)
+    return UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1))
 
 
 def init_motors():
-    steer_motor = DRV8871(pin_dir=16, pin_en=19)
-    drive_left  = DRV8871(pin_dir=5,  pin_en=4)
-    drive_right = DRV8871(pin_dir=22, pin_en=28)
+    steer_motor = DRV8871(pin_in1=16, pin_in2=18)
+    drive_left  = DRV8871(pin_in1=5,  pin_in2=4)
+    drive_right = DRV8871(pin_in1=22, pin_in2=28)
     return steer_motor, drive_left, drive_right
 
 
 def init_encoders():
-    steer_encoder = Encoder(pin_a=6, pin_b=7, counts_per_lock=56, deg_per_lock=17.0)
-    drive_left_encoder = Encoder(pin_a=8, pin_b=9)
-    drive_right_encoder = Encoder(pin_a=10, pin_b=11)
+    steer_encoder = SteeringEncoder(pin_a=26, pin_b=27)
+    drive_left_encoder = DrivingEncoder(pin_a=8, pin_b=9)
+    drive_right_encoder = DrivingEncoder(pin_a=10, pin_b=11)
     return steer_encoder, drive_left_encoder, drive_right_encoder
 
 
@@ -62,123 +58,113 @@ def init_led_and_watchdog():
     return led, watchdog
 
 
-def run_mode_loop(uart, parser, watchdog, led):
-    LOOP_PERIOD_MS = 20   # 50 Hz
-    last_loop = time.ticks_ms()
-    last_odom = last_loop
-    last_heartbeat = last_loop
-
-    while True:
-        loop_start = time.ticks_ms()
-
-        try:
-            # --- NON-BLOCKING UART READ ---
-            if uart.any():
-                line = uart.readline()
-                if line:
-                    try:
-                        decoded = line.decode().strip()
-                    except UnicodeError:
-                        decoded = ""
-                    if decoded.startswith("CMD"):
-                        parser.handle_line(decoded)
-
-            # --- STEERING ---
-            if parser.steering_target is not None:
-                parser.update_steering()
-
-            # --- ODOMETRY @ 20 Hz ---
-            now = time.ticks_ms()
-            if time.ticks_diff(now, last_odom) >= 50:
-                parser.emit_odometry(uart)
-                last_odom = now
-
-            # --- HEARTBEAT @ 1 Hz ---
-            if time.ticks_diff(now, last_heartbeat) >= 1000:
-                uart.write(b"HEARTBEAT\n")
-                last_heartbeat = now
-
-            # --- HOUSEKEEPING ---
-            watchdog.reset()
-            watchdog.check()
-            led.update()
-
-            # --- FIXED LOOP TIMING ---
-            elapsed = time.ticks_diff(time.ticks_ms(), loop_start)
-            if elapsed < LOOP_PERIOD_MS:
-                time.sleep_ms(LOOP_PERIOD_MS - elapsed)
-
-        except Exception as e:
-            uart.write(b"RUN loop error\n")
-            uart.write(str(e).encode() + b"\n")
-            enter_error_mode(led)
-            time.sleep_ms(50)
-
-
 def main():
-    # Initialize UART0 immediately so we always have visibility
     uart = init_uart_for_run_mode()
-    uart.write(b"MAIN: entered main()\n")
+    print("MAIN: entered main()\r\n")
 
-    # Init LED + watchdog
     led, watchdog = init_led_and_watchdog()
-    uart.write(b"MAIN: init_led_and_watchdog\n")
-
-    # Simple RUN-mode startup blink
     startup_blink(led, "RUN")
-    uart.write(b"MAIN: startup_blink\n")
-
-    # Start mode blinker in RUN pattern
     ModeBlinker(led, "RUN")
-    uart.write(b"MAIN: mode_blinker\n")
 
-    # Hardware init
-    uart.write(b"MAIN: init_motors\n")
-    try:
-        steer_motor, drive_left, drive_right = init_motors()
-    except Exception as e:
-        uart.write(b"ERR: init_motors failed\n")
-        enter_error_mode(led)
-        return
+    # Init motors
+    print("MAIN: init_motors\r\n")
+    steer_motor, drive_left, drive_right = init_motors()
 
-    uart.write(b"MAIN: init_encoders\n")
-    try:
-        steer_encoder, drive_left_encoder, drive_right_encoder = init_encoders()
-    except Exception as e:
-        uart.write(b"ERR: init_encoders failed\n")
-        enter_error_mode(led)
-        return
+    # Init encoders
+    print("MAIN: init_encoders\r\n")
+    steer_encoder, drive_left_encoder, drive_right_encoder = init_encoders()
 
-    uart.write(b"MAIN: zero steer encoder\n")
-    try:
-        steer_encoder.zero()
-    except Exception as e:
-        uart.write(b"ERR: steer_encoder.zero failed\n")
-        enter_error_mode(led)
-        return
+    # ---------------------------------------------------------
+    # SMART AUTO-ZERO STEERING (TIMED, SAFE)
+    # ---------------------------------------------------------
+
+    steer_motor.stop()
+    time.sleep_ms(200)
+
+    initial_pos = steer_encoder.get_position()
+    steering_target = 0.0
 
     # Start watchdog
     watchdog.start()
-    uart.write(b"MAIN: watchdog started\n")
 
-    # Parser init
-    uart.write(b"MAIN: init parser\n")
-    try:
-        parser = CommandParser(
-            uart=uart,
-            left_motor=drive_left,
-            right_motor=drive_right,
-            steering_motor=steer_motor,
-            watchdog=watchdog,
-            left_encoder=drive_left_encoder,
-            right_encoder=drive_right_encoder,
-            steering_encoder=steer_encoder,
-            verbose=True,
-        )
-    except Exception as e:
-        uart.write(b"ERR: parser init failed\n")
-        enter_error_mode(led)
-        return
+    # Init parser
+    parser = CommandParser(
+        uart=uart,
+        left_motor=drive_left,
+        right_motor=drive_right,
+        steering_motor=steer_motor,
+        watchdog=watchdog,
+        left_encoder=drive_left_encoder,
+        right_encoder=drive_right_encoder,
+        steering_encoder=steer_encoder,
+        steering_target=steering_target,
+        verbose=True,
+    )
 
-    uart.write(b"MAIN: entering run loop\n")
-    run_mode_loop(uart, parser, watchdog, led)
+    print("MAIN: entering run loop")
+
+    # ---------------------------------------------------------
+    # INTEGRATED UART + HEARTBEAT + WATCHDOG LOOP
+    # ---------------------------------------------------------
+
+    rx_buffer = ""
+    last_hb = time.ticks_ms()
+    TIMEOUT_MS = 2000
+
+    while True:
+        # -----------------------------------------
+        # UART READ (non-blocking, buffered)
+        # -----------------------------------------
+        data = uart.read()
+        if data:
+            try:
+                rx_buffer += data.decode()
+            except UnicodeError:
+                pass
+
+            # Process complete lines
+            while "\n" in rx_buffer:
+                line, rx_buffer = rx_buffer.split("\n", 1)
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                # -----------------------------------------
+                # HEARTBEAT
+                # -----------------------------------------
+                if line == "HB":
+                    last_hb = time.ticks_ms()
+                    continue
+
+                if line.startswith("CMD"):
+                    last_hb = time.ticks_ms()
+
+                # -----------------------------------------
+                # COMMAND
+                # -----------------------------------------
+                #print("RX:", line)
+                try:
+                    parser.handle_line(line)
+                except Exception as e:
+                    print("CMD parse error:", e)
+
+        # -----------------------------------------
+        # WATCHDOG TIMEOUT
+        # -----------------------------------------
+        if time.ticks_diff(time.ticks_ms(), last_hb) > TIMEOUT_MS:
+            print("WATCHDOG TIMEOUT — stopping motors")
+            steer_motor.stop()
+            drive_left.stop()
+            drive_right.stop()
+            last_hb = time.ticks_ms()  # prevent repeated prints
+
+        # -----------------------------------------
+        # LED + WATCHDOG + CONTROL LOOP
+        # -----------------------------------------
+        watchdog.reset()
+        led.update()
+
+        # (Optional: steering PID, odometry, etc.)
+
+        time.sleep_ms(10)
