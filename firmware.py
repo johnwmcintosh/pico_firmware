@@ -77,7 +77,8 @@ def main():
     # ---------------------------------------------------------
     # SMART AUTO-ZERO STEERING (TIMED, SAFE)
     # ---------------------------------------------------------
-
+    drive_left.stop()
+    drive_right.stop()
     steer_motor.stop()
     time.sleep_ms(200)
 

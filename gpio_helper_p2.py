@@ -17,9 +17,10 @@ class DRV8871:
         self.pwm_active = False
         self.pwm_pin_num = None
 
-        # Start in brake mode (both HIGH)
-        self.in1.high()
-        self.in2.high()
+        # Immediately enter safe state
+        self._release_pwm()
+        self.in1.low()
+        self.in2.low()
 
     # ------------------------------------------------------------
     def _release_pwm(self) -> None:
@@ -52,6 +53,12 @@ class DRV8871:
         self._release_pwm()
         self.in1.high()
         self.in2.high()
+
+    def coast(self):
+        # Coast mode
+        self._release_pwm()
+        self.in1.low()
+        self.in2.low()
 
     # ------------------------------------------------------------
     # Compatibility with old parser API
