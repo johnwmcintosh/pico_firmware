@@ -41,7 +41,7 @@ def init_uart_for_run_mode():
 def init_motors():
     steer_motor = DRV8871(pin_in1=16, pin_in2=18)
     drive_left  = DRV8871(pin_in1=5,  pin_in2=4)
-    drive_right = DRV8871(pin_in1=22, pin_in2=28)
+    drive_right = DRV8871(pin_in1=22, pin_in2=7)
     return steer_motor, drive_left, drive_right
 
 
@@ -77,9 +77,9 @@ def main():
     # ---------------------------------------------------------
     # SMART AUTO-ZERO STEERING (TIMED, SAFE)
     # ---------------------------------------------------------
-    drive_left.stop()
-    drive_right.stop()
-    steer_motor.stop()
+    drive_left.coast()
+    drive_right.coast()
+    steer_motor.coast()
     time.sleep_ms(200)
 
     initial_pos = steer_encoder.get_position()
@@ -155,9 +155,9 @@ def main():
         # -----------------------------------------
         if time.ticks_diff(time.ticks_ms(), last_hb) > TIMEOUT_MS:
             print("WATCHDOG TIMEOUT — stopping motors")
-            steer_motor.stop()
-            drive_left.stop()
-            drive_right.stop()
+            steer_motor.coast()
+            drive_left.coast()
+            drive_right.coast()
             last_hb = time.ticks_ms()  # prevent repeated prints
 
         # -----------------------------------------

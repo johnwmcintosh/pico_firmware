@@ -51,8 +51,8 @@ class DRV8871:
     def stop(self) -> None:
         """Brake mode: both pins HIGH."""
         self._release_pwm()
-        self.in1.high()
-        self.in2.high()
+        self.in1.low()
+        self.in2.low()
 
     def coast(self):
         # Coast mode
@@ -71,7 +71,7 @@ class DRV8871:
         power = max(min(power, 1.0), -1.0)
 
         if power == 0:
-            self.stop()
+            self.coast()
             return
 
         duty = int(abs(power) * 65535)
