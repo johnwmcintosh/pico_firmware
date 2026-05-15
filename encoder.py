@@ -20,7 +20,7 @@ class DrivingEncoder:
         self.m_per_count = self.wheel_circ_m / self.counts_per_rev
 
         # quadrature on A only (fine for drive wheels)
-        self.pin_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING,
+        self.pin_a.irq(trigger=Pin.IRQ_RISING,
                        handler=self._update)
 
     def _update(self, pin):
