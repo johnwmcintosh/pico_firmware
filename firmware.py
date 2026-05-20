@@ -110,8 +110,10 @@ def main():
 
     rx_buffer = ""
     last_hb = time.ticks_ms()
+    last_odom = time.ticks_ms()
     TIMEOUT_MS = 2000
-
+    ODOM_INTERVAL_MS = 100  # 10Hz
+    
     while True:
         # -----------------------------------------
         # UART READ (non-blocking, buffered)
@@ -166,6 +168,12 @@ def main():
         watchdog.reset()
         led.update()
 
-        # (Optional: steering PID, odometry, etc.)
+        # Steering PID, odometry, etc
+        if time.ticks_diff(time.ticks_ms(), last_odom) >= ODOM_INTERVAL_MS:
+            try:
+                parser.emit_odometry(uart)
+            except Exception as e:
+                print("ODOM error:", e)
+            last_odom = time.ticks_ms()
 
         time.sleep_ms(10)

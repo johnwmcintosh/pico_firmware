@@ -15,21 +15,27 @@ class DrivingEncoder:
         self.velocity = 0
 
         # wheel odometry calibration
-        self.counts_per_rev = 199
-        self.wheel_circ_m = 0.2136
+        self.counts_per_rev = 204
+        self.wheel_circ_m = 0.2136  # 67mm diameter = 0.2136m circumference
         self.m_per_count = self.wheel_circ_m / self.counts_per_rev
 
         # quadrature on A only (fine for drive wheels)
-        self.pin_a.irq(trigger=Pin.IRQ_RISING,
+        self.pin_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING,
                        handler=self._update)
 
     def _update(self, pin):
         a = self.pin_a.value()
         b = self.pin_b.value()
+        prev = self.position
+        
         if a == b:
             self.position -= 1
         else:
             self.position += 1
+
+        # Reject impossible jumps (noise)
+        if abs(self.position - prev) > 5:
+            self.position = prev
 
     def zero(self):
         self.position = 0

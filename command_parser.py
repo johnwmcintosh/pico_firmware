@@ -1,4 +1,5 @@
 from encoder import SteeringEncoder, DrivingEncoder
+import time
 
 class CommandParser:
     def __init__(self, uart, left_motor, right_motor, steering_motor, watchdog,
@@ -20,6 +21,12 @@ class CommandParser:
 
         # normalized steering target (-1.0 .. +1.0)
         self.steering_target = steering_target
+
+        # Stall detection for steering
+        self._steer_stall_start = None
+        self._steer_last_encoder_pos = None
+        self.STEER_STALL_TIMEOUT_MS = 2000   # coast after 2 seconds of stall
+        self.STEER_STALL_MIN_COUNTS = 2      # must move at least 2 counts to not be stalled
 
         self.verbose = verbose
 
@@ -65,30 +72,55 @@ class CommandParser:
     # STEERING PID (normalized)
     # ---------------------------------------------------------
     def update_steering_stick(self, x):
-        # x in [-1, 1]
         DEAD = 0.05
-        p_min = 0.60   # minimum effective PWM (motor starts moving)
-        p_max = 0.80   # safe max for rack
+        p_min = 0.60
+        p_max = 0.80
 
         ax = abs(x)
 
-        # Deadband
         if ax < DEAD:
-            self.steering_motor.stop()
+            self.steering_motor.coast()
+            self._steer_stall_start = None
+            self._steer_last_encoder_pos = None
             return
-        
-        pwr = 1 - ax
 
-        # Map |x| from [DEAD, 1] -> [p_min, p_max]
+        # Check stall
+        if self.steering_encoder is not None:
+            current_pos = self.steering_encoder.get_position()
+
+            if self._steer_last_encoder_pos is None:
+                # First reading — initialize
+                self._steer_last_encoder_pos = current_pos
+                self._steer_stall_start = time.ticks_ms()
+            else:
+                moved = abs(current_pos - self._steer_last_encoder_pos)
+                if moved >= self.STEER_STALL_MIN_COUNTS:
+                    # Moving fine — reset stall timer
+                    self._steer_stall_start = time.ticks_ms()
+                    self._steer_last_encoder_pos = current_pos
+                else:
+                    # Not moving — check timeout
+                    stall_ms = time.ticks_diff(
+                        time.ticks_ms(), self._steer_stall_start
+                    )
+                    if stall_ms > self.STEER_STALL_TIMEOUT_MS:
+                        print("STEER STALL DETECTED — coasting motor")
+                        self.steering_motor.coast()
+                        self._steer_stall_start = None
+                        self._steer_last_encoder_pos = None
+                        return
+
+        # Normal drive
+        pwr = 1 - ax
         t = (pwr - DEAD) / (1.0 - DEAD)
         power = p_min + t * (p_max - p_min)
 
-        # Restore direction
         if x < 0:
             power = -power
 
         print("x:", x, "steering power:", power)
         self.steering_motor.set_power(power)
+
 
     def update_steering_pid(self):
         if self.steering_encoder is None:
