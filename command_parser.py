@@ -30,12 +30,17 @@ class CommandParser:
 
         self.verbose = verbose
 
+        self.lidar_status = "---"
+        self.lidar_dist = None
+        self.lidar_angle = None
+        self.lidar_latch = 0
+
     # ---------------------------------------------------------
     # MAIN LINE PARSER
     # ---------------------------------------------------------
     def handle_line(self, line):
         #print("HANDLE:", line)
-        print("RUNTIME STEER MOTOR:", self.steering_motor.pin_in1, self.steering_motor.pin_in2)
+        #print("RUNTIME STEER MOTOR:", self.steering_motor.pin_in1, self.steering_motor.pin_in2)
 
         try:
             if isinstance(line, (bytes, bytearray)):
@@ -67,6 +72,28 @@ class CommandParser:
 
         elif cmd == "PRNT":
             self.verbose = (parts[1].upper() == "ON")
+
+        elif cmd == "LIDAR":
+            try:
+                if parts[1] == "OK":
+                    self.lidar_status = "OK"
+                    self.lidar_dist = None
+                    self.lidar_angle = None
+                    self.lidar_latch = 0
+                elif parts[1] == "NEAR":
+                    self.lidar_status = "NEAR"
+                    self.lidar_dist = None
+                    self.lidar_angle = None
+                    self.lidar_latch = 6
+                else:
+                    self.lidar_status = parts[1]
+                    self.lidar_dist = float(parts[2])
+                    self.lidar_angle = float(parts[3])
+                    self.lidar_latch = 6
+                    print(f"LIDAR {self.lidar_status} {self.lidar_dist:.2f}m angle={self.lidar_angle:.1f}d")
+            except Exception as e:
+                self.lidar_latch = 0
+                print("LIDAR parse error:", e)
 
     # ---------------------------------------------------------
     # STEERING PID (normalized)

@@ -1,6 +1,6 @@
 import time
 import uasyncio as asyncio
-from machine import UART, Pin
+from machine import UART, Pin, I2C
 
 from led_manager import LEDStatus, startup_blink, enter_error_mode
 from watchdog import Watchdog
@@ -58,10 +58,27 @@ def init_led_and_watchdog():
     return led, watchdog
 
 
+def init_display():
+    import ssd1306  # type: ignore
+    i2c = I2C(0, sda=Pin(20), scl=Pin(21), freq=400000)
+    return ssd1306.SSD1306_I2C(128, 32, i2c)
+
+
 def main():
     uart = init_uart_for_run_mode()
     print("MAIN: entered main()\r\n")
 
+    try:
+        display = init_display()
+    except Exception as e:
+        print("DISPLAY init failed:", e)
+        display = None
+
+    if (display is not None):
+        display.fill(0)
+        display.text("Booting...", 0, 0, 1)
+        display.show()
+        
     led, watchdog = init_led_and_watchdog()
     startup_blink(led, "RUN")
     ModeBlinker(led, "RUN")
@@ -111,8 +128,10 @@ def main():
     rx_buffer = ""
     last_hb = time.ticks_ms()
     last_odom = time.ticks_ms()
-    TIMEOUT_MS = 2000
-    ODOM_INTERVAL_MS = 100  # 10Hz
+    last_display = time.ticks_ms()
+    TIMEOUT_MS = 5000
+    ODOM_INTERVAL_MS = 100   # 10Hz
+    DISPLAY_INTERVAL_MS = 500
     
     while True:
         # -----------------------------------------
@@ -167,6 +186,26 @@ def main():
         # -----------------------------------------
         watchdog.reset()
         led.update()
+
+        # Display update
+        if display and time.ticks_diff(time.ticks_ms(), last_display) >= DISPLAY_INTERVAL_MS:
+            try:
+                display.fill(0)
+                if parser.lidar_latch > 0:
+                    parser.lidar_latch -= 1
+                    if parser.lidar_status == "NEAR":
+                        display.text("STOP: NEAR", 0, 0, 1)
+                        display.text("<0.10m", 0, 8, 1)
+                    else:
+                        display.text(f"{parser.lidar_status} {parser.lidar_dist:.2f}m", 0, 0, 1)
+                        display.text(f"Ang:{parser.lidar_angle:.1f}d", 0, 8, 1)
+                else:
+                    display.text("LIDAR:", 0, 0, 1)
+                    display.text("Path is clear", 0, 8, 1)
+                display.show()
+            except Exception as e:
+                print("DISPLAY error:", e)
+            last_display = time.ticks_ms()
 
         # Steering PID, odometry, etc
         if time.ticks_diff(time.ticks_ms(), last_odom) >= ODOM_INTERVAL_MS:
