@@ -129,9 +129,11 @@ def main():
     last_hb = time.ticks_ms()
     last_odom = time.ticks_ms()
     last_display = time.ticks_ms()
+    last_awaiting_ros = time.ticks_ms()
     TIMEOUT_MS = 5000
     ODOM_INTERVAL_MS = 100   # 10Hz
-    DISPLAY_INTERVAL_MS = 500
+    DISPLAY_INTERVAL_MS = 2000
+    AWAITING_ROS_MS = 2000
     
     while True:
         # -----------------------------------------
@@ -190,18 +192,15 @@ def main():
         # Display update
         if display and time.ticks_diff(time.ticks_ms(), last_display) >= DISPLAY_INTERVAL_MS:
             try:
+                #if parser.lidar_latch > 0:
+                #    parser.lidar_latch -= 1
+                dist_str = f"{parser.lidar_dist:.1f}" if parser.lidar_dist is not None else "--"
+                angle_str = f"{parser.lidar_angle:.1f}" if parser.lidar_angle is not None else "--"
                 display.fill(0)
-                if parser.lidar_latch > 0:
-                    parser.lidar_latch -= 1
-                    if parser.lidar_status == "NEAR":
-                        display.text("STOP: NEAR", 0, 0, 1)
-                        display.text("<0.10m", 0, 8, 1)
-                    else:
-                        display.text(f"{parser.lidar_status} {parser.lidar_dist:.2f}m", 0, 0, 1)
-                        display.text(f"Ang:{parser.lidar_angle:.1f}d", 0, 8, 1)
-                else:
-                    display.text("LIDAR:", 0, 0, 1)
-                    display.text("Path is clear", 0, 8, 1)
+                display.text(f"{parser.lidar_status}:", 0, 0, 1)
+                display.text(f"Dist:{dist_str}m", 0, 8, 1)
+                display.text(f"Ang:{angle_str}d", 0, 16, 1)
+
                 display.show()
             except Exception as e:
                 print("DISPLAY error:", e)
