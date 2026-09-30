@@ -60,8 +60,22 @@ def init_led_and_watchdog():
 
 def init_display():
     import ssd1306  # type: ignore
-    i2c = I2C(0, sda=Pin(20), scl=Pin(21), freq=400000)
-    return ssd1306.SSD1306_I2C(128, 32, i2c)
+
+    displays = []
+
+    try:
+        i2c0 = I2C(0, sda=Pin(20), scl=Pin(21), freq=400000)
+        displays.append(ssd1306.SSD1306_I2C(128, 32, i2c0))
+    except Exception as e:
+        print("DISPLAY0 init failed:", e)
+
+    try:
+        i2c1 = I2C(1, sda=Pin(14), scl=Pin(15), freq=400000)
+        displays.append(ssd1306.SSD1306_I2C(128, 32, i2c1))
+    except Exception as e:
+        print("DISPLAY1 init failed:", e)
+
+    return displays
 
 
 def main():
@@ -69,16 +83,16 @@ def main():
     print("MAIN: entered main()\r\n")
 
     try:
-        display = init_display()
+        displays = init_display()
     except Exception as e:
         print("DISPLAY init failed:", e)
-        display = None
+        displays = []
 
-    if (display is not None):
+    for display in displays:
         display.fill(0)
         display.text("Booting...", 0, 0, 1)
         display.show()
-        
+
     led, watchdog = init_led_and_watchdog()
     startup_blink(led, "RUN")
     ModeBlinker(led, "RUN")
@@ -141,10 +155,11 @@ def main():
         # -----------------------------------------
         data = uart.read()
         if data:
+            print("RAW:", repr(data))  # TEMP DEBUG — remove once UART issue is found
             try:
                 rx_buffer += data.decode()
-            except UnicodeError:
-                pass
+            except UnicodeError as e:
+                print("DECODE ERROR:", e, repr(data))  # TEMP DEBUG
 
             # Process complete lines
             while "\n" in rx_buffer:
@@ -190,18 +205,30 @@ def main():
         led.update()
 
         # Display update
-        if display and time.ticks_diff(time.ticks_ms(), last_display) >= DISPLAY_INTERVAL_MS:
+        if displays and time.ticks_diff(time.ticks_ms(), last_display) >= DISPLAY_INTERVAL_MS:
             try:
                 #if parser.lidar_latch > 0:
                 #    parser.lidar_latch -= 1
                 dist_str = f"{parser.lidar_dist:.1f}" if parser.lidar_dist is not None else "--"
                 angle_str = f"{parser.lidar_angle:.1f}" if parser.lidar_angle is not None else "--"
-                display.fill(0)
-                display.text(f"{parser.lidar_status}:", 0, 0, 1)
-                display.text(f"Dist:{dist_str}m", 0, 8, 1)
-                display.text(f"Ang:{angle_str}d", 0, 16, 1)
 
-                display.show()
+                yaw_str = f"{parser.imu_yaw:.1f}" if parser.imu_yaw is not None else "--"
+                pitch_str = f"{parser.imu_pitch:.1f}" if parser.imu_pitch is not None else "--"
+                roll_str = f"{parser.imu_roll:.1f}" if parser.imu_roll is not None else "--"
+
+                for i, display in enumerate(displays):
+                    display.fill(0)
+                    if i == 0:
+                        # Left display — IMU
+                        display.text("IMU:", 0, 0, 1)
+                        display.text(f"Y:{yaw_str} P:{pitch_str}", 0, 8, 1)
+                        display.text(f"Roll:{roll_str}", 0, 16, 1)
+                    else:
+                        # Right display — LIDAR
+                        display.text(f"{parser.lidar_status}:", 0, 0, 1)
+                        display.text(f"Dist:{dist_str}m", 0, 8, 1)
+                        display.text(f"Ang:{angle_str}d", 0, 16, 1)
+                    display.show()
             except Exception as e:
                 print("DISPLAY error:", e)
             last_display = time.ticks_ms()

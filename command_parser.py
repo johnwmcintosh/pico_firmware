@@ -35,6 +35,10 @@ class CommandParser:
         self.lidar_angle = None
         self.lidar_latch = 0
 
+        self.imu_yaw = None
+        self.imu_pitch = None
+        self.imu_roll = None
+
     # ---------------------------------------------------------
     # MAIN LINE PARSER
     # ---------------------------------------------------------
@@ -94,6 +98,14 @@ class CommandParser:
             except Exception as e:
                 self.lidar_latch = 0
                 print("LIDAR parse error:", e)
+
+        elif cmd == "IMU":
+            try:
+                self.imu_yaw = float(parts[1])
+                self.imu_pitch = float(parts[2])
+                self.imu_roll = float(parts[3])
+            except Exception as e:
+                print("IMU parse error:", e)
 
     # ---------------------------------------------------------
     # STEERING PID (normalized)
